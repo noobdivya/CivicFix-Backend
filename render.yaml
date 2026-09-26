@@ -16,8 +16,6 @@ services:
         sync: false
       - key: ADMIN_PASSWORD        # first admin account's password
         sync: false
-      - key: AADHAAR_HASH_KEY      # never change this once reports exist
-        generateValue: true
       - key: COOKIE_SECURE
         value: "true"
       - key: TRUSTED_PROXY_HOPS    # Vercel rewrite -> Render load balancer

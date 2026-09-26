@@ -21,25 +21,3 @@ func TestIndianMobile(t *testing.T) {
 		}
 	}
 }
-
-func TestAadhaar(t *testing.T) {
-	// 234123412346 is a well-known valid test number (Verhoeff-correct).
-	valid := []string{"234123412346", "2341 2341 2346", "2341-2341-2346"}
-	for _, in := range valid {
-		if _, ok := Aadhaar(in); !ok {
-			t.Errorf("Aadhaar(%q) should be valid", in)
-		}
-	}
-	invalid := []string{
-		"234123412345", // bad checksum
-		"123412341234", // starts with 1
-		"034123412346", // starts with 0
-		"23412341234",  // 11 digits
-		"23412341234a",
-	}
-	for _, in := range invalid {
-		if _, ok := Aadhaar(in); ok {
-			t.Errorf("Aadhaar(%q) should be invalid", in)
-		}
-	}
-}

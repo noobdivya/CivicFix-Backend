@@ -17,7 +17,7 @@ Prerequisites: [Go](https://go.dev/) 1.22+ and [Docker Desktop](https://www.dock
 
 ```bash
 cp .env.example .env          # Windows PowerShell: copy .env.example .env
-# edit .env: set AADHAAR_HASH_KEY and ADMIN_PASSWORD
+# edit .env: set ADMIN_PASSWORD
 docker compose up -d          # start PostgreSQL
 go run ./cmd/server           # API on http://localhost:8080
 go run ./cmd/set-admin        # apply ADMIN_EMAIL / ADMIN_PASSWORD from .env to the admin account
@@ -56,7 +56,6 @@ Each category belongs to a department, so new reports go straight to the right o
 | `NOMINATIM_USER_AGENT` | `CivicFix/0.1 (local development)` | Identifies the app to Nominatim |
 | `SEARCH_COUNTRY_CODES` | `in` | Limit area search to these countries (empty = worldwide) |
 | `UPLOAD_DIR` | `uploads` | Where photos are stored |
-| `AADHAAR_HASH_KEY` | *(dev key)* | Secret for hashing Aadhaar numbers — **set a long random value** |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@civicfix.local` / *(random, printed once)* | First admin account |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front of the API that append to `X-Forwarded-For`, so rate limits see the real client IP (`2` for Vercel → Render) |
@@ -73,7 +72,7 @@ Each category belongs to a department, so new reports go straight to the right o
 | GET | `/api/geo/reverse?lat=&lng=` | Area / city for coordinates |
 | GET | `/api/geo/search?q=` | Find a place by name (for choosing an area) |
 | GET | `/api/categories` | Issue categories |
-| POST | `/api/issues` | Report an issue (multipart: category, name, phone, aadhaar, description, 1–2 × photo, lat, lng, address, area, consent) |
+| POST | `/api/issues` | Report an issue (multipart: category, name, phone, description, 1–2 × photo, lat, lng, address, area, consent) |
 | GET | `/api/track?code=&phone=` | Citizen tracking: status, public timeline, photos |
 | GET | `/api/officials/messages` | Messages from officials |
 | POST | `/api/contact` | Contact form |
@@ -104,8 +103,6 @@ The API runs on [Render](https://render.com) as a Docker web service ([Dockerfil
    - `DATABASE_URL`: the Neon connection string
    - `CORS_ALLOWED_ORIGINS`: your Vercel URL, e.g. `https://civicfix.vercel.app`
    - `ADMIN_EMAIL` / `ADMIN_PASSWORD`: the first admin account
-
-   `AADHAAR_HASH_KEY` is generated automatically. Don't change it once reports exist, or old tracking lookups stop matching.
 3. Check `https://<your-service>.onrender.com/api/health` returns `{"database":"up","status":"ok"}`.
 4. Set `BACKEND_URL` on the Vercel project to the Render URL (see the frontend README).
 
@@ -114,7 +111,7 @@ The API runs on [Render](https://render.com) as a Docker web service ([Dockerfil
 - Uploaded photos are stored on the service's local disk, which is **wiped on every deploy or restart**. To keep photos, use a paid plan with a [persistent disk](https://render.com/docs/disks) mounted at `/app/uploads`, or move photo storage to object storage.
 
 ## Security & privacy
-- Aadhaar: only the last 4 digits and a keyed HMAC-SHA256 hash are stored — never the full number.
+- No Aadhaar or other government ID is collected; citizens give only a name and mobile number.
 - Passwords hashed with bcrypt; only SHA-256 hashes of session tokens are stored; sessions are revoked when an account is deactivated or its password reset.
 - Photos are decoded and re-encoded (strips EXIF/GPS metadata), size- and pixel-limited.
 - Per-IP rate limits on login, reporting, contact and tracking; tracking requires tracking ID **and** mobile number.
@@ -131,7 +128,7 @@ internal/database/   connection, migration runner, SQL migrations
 internal/handlers/   HTTP handlers (public, staff workflow, admin, notifications)
 internal/media/      photo validation / resizing
 internal/middleware/ CORS, logging, rate limiting, static files
-internal/validate/   phone & Aadhaar validation
+internal/validate/   phone number validation
 Dockerfile           production image (used by Render)
 render.yaml          Render Blueprint
 ```

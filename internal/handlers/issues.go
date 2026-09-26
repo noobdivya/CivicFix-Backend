@@ -1,10 +1,7 @@
 package handlers
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -32,7 +29,6 @@ type issueForm struct {
 	category    string
 	name        string
 	phone       string // normalised 10 digits
-	aadhaar     string // normalised 12 digits — never stored or logged
 	description string
 	address     string
 	area        string
@@ -74,11 +70,6 @@ func parseIssueForm(r *http.Request) (issueForm, map[string]string) {
 		f.phone = p
 	} else {
 		errs["phone"] = "Enter a valid 10-digit Indian mobile number."
-	}
-	if a, ok := validate.Aadhaar(v("aadhaar")); ok {
-		f.aadhaar = a
-	} else {
-		errs["aadhaar"] = "Enter a valid 12-digit Aadhaar number."
 	}
 	if n := utf8.RuneCountInString(f.description); n < 20 || n > 2000 {
 		errs["description"] = "Describe the issue in 20 to 2000 characters."
@@ -202,8 +193,6 @@ func saveUpload(fh *multipart.FileHeader, uploadDir string) (*media.Saved, error
 func (h *Handler) insertIssue(r *http.Request, f issueForm, categoryID int, departmentID *int, photos []*media.Saved) (*CreatedIssue, error) {
 	ctx := r.Context()
 	title := makeTitle(f.description)
-	aadhaarLast4 := f.aadhaar[len(f.aadhaar)-4:]
-	aadhaarHash := h.aadhaarHash(f.aadhaar)
 
 	for attempt := 0; attempt < 5; attempt++ {
 		code, err := trackingCode()
@@ -218,11 +207,11 @@ func (h *Handler) insertIssue(r *http.Request, f issueForm, categoryID int, depa
 		c := &CreatedIssue{TrackingCode: code, Title: title, Address: f.address, Status: "reported"}
 		err = tx.QueryRow(ctx, `
 			INSERT INTO issues (category_id, department_id, title, description, status, address, area, latitude, longitude,
-				tracking_code, reporter_name, reporter_phone, reporter_aadhaar_last4, reporter_aadhaar_hash)
-			VALUES ($1, $2, $3, $4, 'reported', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				tracking_code, reporter_name, reporter_phone)
+			VALUES ($1, $2, $3, $4, 'reported', $5, $6, $7, $8, $9, $10, $11)
 			RETURNING id, created_at`,
 			categoryID, departmentID, title, f.description, f.address, f.area, f.lat, f.lng,
-			code, f.name, f.phone, aadhaarLast4, aadhaarHash,
+			code, f.name, f.phone,
 		).Scan(&c.ID, &c.CreatedAt)
 		if err != nil {
 			_ = tx.Rollback(ctx)
@@ -266,14 +255,6 @@ func (h *Handler) insertIssue(r *http.Request, f issueForm, categoryID int, depa
 		return c, nil
 	}
 	return nil, errors.New("could not generate a unique tracking code")
-}
-
-// aadhaarHash is a keyed one-way hash: it lets us recognise the same
-// Aadhaar number again without being able to recover it.
-func (h *Handler) aadhaarHash(aadhaar string) string {
-	m := hmac.New(sha256.New, []byte(h.Config.AadhaarHashKey))
-	m.Write([]byte(aadhaar))
-	return hex.EncodeToString(m.Sum(nil))
 }
 
 // makeTitle derives a short title from the first line of the description.

@@ -32,9 +32,6 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
-	if cfg.AadhaarHashKey == config.DevAadhaarHashKey {
-		log.Println("WARNING: AADHAAR_HASH_KEY is not set; using an insecure development key")
-	}
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
 		log.Fatalf("upload dir: %v", err)
 	}

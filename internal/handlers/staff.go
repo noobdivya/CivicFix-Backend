@@ -185,9 +185,8 @@ type Event struct {
 }
 
 type Reporter struct {
-	Name         *string `json:"name"`
-	Phone        *string `json:"phone"`
-	AadhaarLast4 *string `json:"aadhaarLast4"`
+	Name  *string `json:"name"`
+	Phone *string `json:"phone"`
 }
 
 type IssueDetail struct {
@@ -200,7 +199,7 @@ type IssueDetail struct {
 	StartedAt       *time.Time `json:"startedAt"`
 	ResolvedAt      *time.Time `json:"resolvedAt"`
 	RejectionReason *string    `json:"rejectionReason"`
-	Reporter        *Reporter  `json:"reporter"` // hidden from field workers except name/phone
+	Reporter        *Reporter  `json:"reporter"` // name and phone, to contact the citizen
 	Photos          []Photo    `json:"photos"`
 	Events          []Event    `json:"events"`
 }
@@ -216,12 +215,12 @@ func (h *Handler) loadIssueDetail(ctx context.Context, u *auth.User, id int64) (
 	var rep Reporter
 	err := h.DB.QueryRow(ctx, "SELECT "+staffIssueColumns+`,
 			i.description, i.latitude, i.longitude, i.reviewed_at, i.assigned_at, i.started_at, i.resolved_at,
-			i.rejection_reason, i.reporter_name, i.reporter_phone, i.reporter_aadhaar_last4`+
+			i.rejection_reason, i.reporter_name, i.reporter_phone`+
 		staffIssueJoins+" WHERE i.id = $1 AND "+cond, args...,
 	).Scan(&d.ID, &d.TrackingCode, &d.Title, &d.Category, &d.CategorySlug, &d.Status, &d.Priority, &d.Reviewed,
 		&d.Address, &d.Area, &d.DepartmentID, &d.DepartmentName, &wID, &wName, &d.CreatedAt, &d.DueAt, &d.Overdue, &d.PhotoURL,
 		&d.Description, &d.Lat, &d.Lng, &d.ReviewedAt, &d.AssignedAt, &d.StartedAt, &d.ResolvedAt,
-		&d.RejectionReason, &rep.Name, &rep.Phone, &rep.AadhaarLast4)
+		&d.RejectionReason, &rep.Name, &rep.Phone)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, notFound("issue not found")
 	}
@@ -230,9 +229,6 @@ func (h *Handler) loadIssueDetail(ctx context.Context, u *auth.User, id int64) (
 	}
 	if wID != nil && wName != nil {
 		d.Worker = &Person{ID: *wID, Name: *wName}
-	}
-	if u.Role == auth.RoleWorker {
-		rep.AadhaarLast4 = nil // workers only need a contact, not identity data
 	}
 	d.Reporter = &rep
 
