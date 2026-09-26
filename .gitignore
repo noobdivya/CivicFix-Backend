@@ -3,3 +3,4 @@
 *.exe
 /uploads/
 /backups/
+.env.production
