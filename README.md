@@ -59,6 +59,7 @@ Each category belongs to a department, so new reports go straight to the right o
 | `AADHAAR_HASH_KEY` | *(dev key)* | Secret for hashing Aadhaar numbers — **set a long random value** |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@civicfix.local` / *(random, printed once)* | First admin account |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
+| `TRUSTED_PROXY_HOPS` | `0` | Reverse proxies in front of the API that append to `X-Forwarded-For`, so rate limits see the real client IP (`2` for Vercel → Render) |
 
 ## API
 
@@ -94,6 +95,24 @@ Each category belongs to a department, so new reports go straight to the right o
 `/api/dashboard` accepts optional filters (the map endpoint is never filtered):
 `lat`, `lng` (area centre) + `radiusKm` (default 15, max 100) · `status=reported,progress,resolved` · `category=<slug>` · `sinceDays=<1–365>`.
 
+## Deployment (Render + Neon)
+
+The API runs on [Render](https://render.com) as a Docker web service ([Dockerfile](Dockerfile), [render.yaml](render.yaml)). The PostgreSQL database is hosted on [Neon](https://neon.tech). The [frontend](https://github.com/noobdivya/CivicFix-frontend) runs on Vercel and forwards `/api` and `/uploads` to this service, so the browser only talks to one domain and the session cookie works.
+
+1. **Neon:** create a project (region close to the Render region, e.g. AWS Singapore). Copy the **direct** connection string (turn *Connection pooling* off). It looks like `postgresql://user:pass@ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`. Tables are created automatically on first start.
+2. **Render:** *New → Blueprint*, then pick this repository. Render reads `render.yaml` and asks for:
+   - `DATABASE_URL`: the Neon connection string
+   - `CORS_ALLOWED_ORIGINS`: your Vercel URL, e.g. `https://civicfix.vercel.app`
+   - `ADMIN_EMAIL` / `ADMIN_PASSWORD`: the first admin account
+
+   `AADHAAR_HASH_KEY` is generated automatically. Don't change it once reports exist, or old tracking lookups stop matching.
+3. Check `https://<your-service>.onrender.com/api/health` returns `{"database":"up","status":"ok"}`.
+4. Set `BACKEND_URL` on the Vercel project to the Render URL (see the frontend README).
+
+**Free-tier limits:**
+- Render's free plan sleeps after 15 minutes idle, so the first request after that takes about a minute.
+- Uploaded photos are stored on the service's local disk, which is **wiped on every deploy or restart**. To keep photos, use a paid plan with a [persistent disk](https://render.com/docs/disks) mounted at `/app/uploads`, or move photo storage to object storage.
+
 ## Security & privacy
 - Aadhaar: only the last 4 digits and a keyed HMAC-SHA256 hash are stored — never the full number.
 - Passwords hashed with bcrypt; only SHA-256 hashes of session tokens are stored; sessions are revoked when an account is deactivated or its password reset.
@@ -113,4 +132,6 @@ internal/handlers/   HTTP handlers (public, staff workflow, admin, notifications
 internal/media/      photo validation / resizing
 internal/middleware/ CORS, logging, rate limiting, static files
 internal/validate/   phone & Aadhaar validation
+Dockerfile           production image (used by Render)
+render.yaml          Render Blueprint
 ```

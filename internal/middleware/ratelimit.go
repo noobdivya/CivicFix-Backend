@@ -3,14 +3,41 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
+// TrustedProxyHops is the number of reverse proxies in front of the API that
+// append to X-Forwarded-For (e.g. 2 for Vercel rewrite -> Render load balancer).
+// 0 means requests arrive directly and RemoteAddr is the client.
+var TrustedProxyHops = 0
+
+// ClientIP returns the caller's IP, taking trusted proxies into account.
+func ClientIP(r *http.Request) string {
+	if TrustedProxyHops > 0 {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			i := len(parts) - TrustedProxyHops
+			if i < 0 {
+				i = 0
+			}
+			if ip := strings.TrimSpace(parts[i]); ip != "" {
+				return ip
+			}
+		}
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
 // RateLimit allows at most `limit` requests per client IP in each `window`.
 // It is a simple in-memory fixed window, enough to stop form spam on a
-// single server. (Behind a reverse proxy, the client IP would need to come
-// from X-Forwarded-For instead of RemoteAddr.)
+// single server. Behind reverse proxies, set TrustedProxyHops so the client
+// IP is read from X-Forwarded-For.
 func RateLimit(limit int, window time.Duration, next http.HandlerFunc) http.HandlerFunc {
 	type bucket struct {
 		count int
@@ -23,10 +50,7 @@ func RateLimit(limit int, window time.Duration, next http.HandlerFunc) http.Hand
 	)
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
+		ip := ClientIP(r)
 		now := time.Now()
 
 		mu.Lock()

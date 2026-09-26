@@ -34,6 +34,9 @@ type Config struct {
 	AdminPassword string
 	// Send the session cookie only over HTTPS (enable in production).
 	CookieSecure bool
+	// Reverse proxies in front of the API that append to X-Forwarded-For
+	// (0 = direct; 2 = Vercel rewrite -> Render).
+	TrustedProxyHops int
 }
 
 // DevAadhaarHashKey is the fallback key; main warns when it is in use.
@@ -64,6 +67,7 @@ func Load() Config {
 		AdminEmail:         getEnv("ADMIN_EMAIL", "admin@civicfix.local"),
 		AdminPassword:      os.Getenv("ADMIN_PASSWORD"),
 		CookieSecure:       os.Getenv("COOKIE_SECURE") == "true",
+		TrustedProxyHops:   getInt("TRUSTED_PROXY_HOPS", 0),
 	}
 }
 
@@ -76,6 +80,13 @@ func getEnv(key, fallback string) string {
 
 func getFloat(key string, fallback float64) float64 {
 	if v, err := strconv.ParseFloat(os.Getenv(key), 64); err == nil {
+		return v
+	}
+	return fallback
+}
+
+func getInt(key string, fallback int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v >= 0 {
 		return v
 	}
 	return fallback

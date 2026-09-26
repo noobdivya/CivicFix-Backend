@@ -39,6 +39,8 @@ func main() {
 		log.Fatalf("upload dir: %v", err)
 	}
 
+	middleware.TrustedProxyHops = cfg.TrustedProxyHops
+
 	authSvc := &auth.Service{DB: pool, SecureCookie: cfg.CookieSecure}
 	if err := authSvc.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
 		log.Fatalf("admin account: %v", err)
