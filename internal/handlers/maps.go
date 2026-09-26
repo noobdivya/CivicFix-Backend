@@ -4,7 +4,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type MapIssue struct {
@@ -29,7 +31,8 @@ func (h *Handler) MapDefault(w http.ResponseWriter, r *http.Request) {
 }
 
 // MapIssues returns the most recent issues that have a location, for
-// plotting as markers on the landing page map.
+// plotting as markers on the landing page map. (The map is never limited by
+// the dashboard's area/radius filter.)
 func (h *Handler) MapIssues(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT i.id, i.title, c.name, c.slug, i.status, i.address, i.latitude, i.longitude, i.created_at
@@ -62,6 +65,22 @@ func (h *Handler) MapIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, issues)
+}
+
+// GeoSearch finds places by name (?q=Karol Bagh) for choosing an area.
+func (h *Handler) GeoSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if n := utf8.RuneCountInString(q); n < 2 || n > 100 {
+		writeErr(w, badRequest("enter 2 to 100 characters to search"), "geo search")
+		return
+	}
+	results, err := h.Geocoder.Search(r.Context(), q, h.Config.SearchCountryCodes)
+	if err != nil {
+		log.Printf("geo search: %v", err)
+		writeError(w, http.StatusBadGateway, "place search is unavailable right now")
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 // ReverseGeocode turns ?lat=&lng= into an area / city name.

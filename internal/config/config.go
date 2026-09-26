@@ -21,7 +21,23 @@ type Config struct {
 
 	// Identifies this app to the OpenStreetMap Nominatim geocoder (required by its usage policy).
 	NominatimUserAgent string
+	// Limit place search to these ISO country codes (comma-separated, empty = worldwide).
+	SearchCountryCodes string
+
+	// Where uploaded photos are stored on disk.
+	UploadDir string
+	// Secret key for hashing Aadhaar numbers. Must be long, random and kept private.
+	AadhaarHashKey string
+
+	// First admin account, created on startup if no admin exists.
+	AdminEmail    string
+	AdminPassword string
+	// Send the session cookie only over HTTPS (enable in production).
+	CookieSecure bool
 }
+
+// DevAadhaarHashKey is the fallback key; main warns when it is in use.
+const DevAadhaarHashKey = "dev-only-insecure-aadhaar-key-change-me"
 
 // Load reads configuration from environment variables, falling back to a
 // local .env file (if present) and then to development defaults.
@@ -42,6 +58,12 @@ func Load() Config {
 		DefaultCityLat:     getFloat("DEFAULT_CITY_LAT", 28.6139),
 		DefaultCityLng:     getFloat("DEFAULT_CITY_LNG", 77.2090),
 		NominatimUserAgent: getEnv("NOMINATIM_USER_AGENT", "CivicFix/0.1 (local development)"),
+		SearchCountryCodes: getEnv("SEARCH_COUNTRY_CODES", "in"),
+		UploadDir:          getEnv("UPLOAD_DIR", "uploads"),
+		AadhaarHashKey:     getEnv("AADHAAR_HASH_KEY", DevAadhaarHashKey),
+		AdminEmail:         getEnv("ADMIN_EMAIL", "admin@civicfix.local"),
+		AdminPassword:      os.Getenv("ADMIN_PASSWORD"),
+		CookieSecure:       os.Getenv("COOKIE_SECURE") == "true",
 	}
 }
 

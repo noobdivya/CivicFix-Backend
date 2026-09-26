@@ -14,6 +14,7 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 			origin := r.Header.Get("Origin")
 			if origin != "" && slices.Contains(allowed, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true") // session cookie
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -36,6 +37,9 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // Logger logs method, path, status and duration for every request.
 func Logger(next http.Handler) http.Handler {

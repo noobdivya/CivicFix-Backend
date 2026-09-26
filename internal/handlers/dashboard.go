@@ -1,9 +1,11 @@
 package handlers
 
 import (
-	"log"
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type DashboardStats struct {
@@ -60,20 +62,29 @@ type DashboardResponse struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
-// Dashboard returns live issue counts by status, per-category totals and
-// the latest reports for the public landing page dashboard.
+// Dashboard returns live issue statistics for the public landing page.
+// Everything can be narrowed with the filters described in parseIssueFilter
+// (area + radius, status, category, time window).
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	resp := DashboardResponse{
-		Categories:   []CategoryCount{},
-		RecentIssues: []RecentIssue{},
-		Trend:        []TrendPoint{},
-		TopAreas:     []AreaCount{},
-		Activity:     []ActivityItem{},
-		UpdatedAt:    time.Now().UTC(),
+	f, err := parseIssueFilter(r)
+	if err != nil {
+		writeErr(w, err, "dashboard")
+		return
 	}
+	resp, err := h.buildDashboard(r.Context(), f)
+	if err != nil {
+		writeErr(w, err, "dashboard")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	err := h.DB.QueryRow(ctx, `
+func (h *Handler) buildDashboard(ctx context.Context, f issueFilter) (*DashboardResponse, error) {
+	resp := &DashboardResponse{UpdatedAt: time.Now().UTC()}
+	args := []any{}
+	with := f.cte(&args)
+
+	if err := h.DB.QueryRow(ctx, with+`
 		SELECT
 			COUNT(*),
 			COUNT(*) FILTER (WHERE status = 'reported'),
@@ -81,146 +92,79 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 			COUNT(*) FILTER (WHERE status = 'resolved'),
 			AVG(EXTRACT(EPOCH FROM (resolved_at - created_at)) / 3600)
 				FILTER (WHERE status = 'resolved' AND resolved_at IS NOT NULL)
-		FROM issues`,
-	).Scan(&resp.Stats.Total, &resp.Stats.Reported, &resp.Stats.InProgress, &resp.Stats.Resolved, &resp.Stats.AvgResolutionHours)
-	if err != nil {
-		log.Printf("dashboard stats: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
+		FROM f`, args...,
+	).Scan(&resp.Stats.Total, &resp.Stats.Reported, &resp.Stats.InProgress, &resp.Stats.Resolved, &resp.Stats.AvgResolutionHours); err != nil {
+		return nil, err
 	}
 
-	rows, err := h.DB.Query(ctx, `
-		SELECT c.slug, c.name, c.description, c.icon, COUNT(i.id)
-		FROM categories c
-		LEFT JOIN issues i ON i.category_id = c.id
-		GROUP BY c.id
-		ORDER BY c.sort_order`)
-	if err != nil {
-		log.Printf("dashboard categories: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
-	}
-	for rows.Next() {
+	var err error
+	if resp.Categories, err = collect(ctx, h, with+`
+		SELECT c.slug, c.name, c.description, c.icon, COUNT(f.id)
+		FROM categories c LEFT JOIN f ON f.category_id = c.id
+		GROUP BY c.id ORDER BY c.sort_order`, args, func(row pgx.CollectableRow) (CategoryCount, error) {
 		var c CategoryCount
-		if err := rows.Scan(&c.Slug, &c.Name, &c.Description, &c.Icon, &c.IssueCount); err != nil {
-			rows.Close()
-			log.Printf("scan category: %v", err)
-			writeError(w, http.StatusInternalServerError, "could not load dashboard")
-			return
-		}
-		resp.Categories = append(resp.Categories, c)
+		return c, row.Scan(&c.Slug, &c.Name, &c.Description, &c.Icon, &c.IssueCount)
+	}); err != nil {
+		return nil, err
 	}
-	rows.Close()
 
-	rows, err = h.DB.Query(ctx, `
-		SELECT i.id, i.title, c.name, i.status, i.address, i.created_at
-		FROM issues i
-		JOIN categories c ON c.id = i.category_id
-		ORDER BY i.created_at DESC
-		LIMIT 6`)
-	if err != nil {
-		log.Printf("dashboard recent: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
+	if resp.RecentIssues, err = collect(ctx, h, with+`
+		SELECT f.id, f.title, c.name, f.status, COALESCE(NULLIF(f.area, ''), f.address), f.created_at
+		FROM f JOIN categories c ON c.id = f.category_id
+		ORDER BY f.created_at DESC LIMIT 6`, args, func(row pgx.CollectableRow) (RecentIssue, error) {
 		var ri RecentIssue
-		if err := rows.Scan(&ri.ID, &ri.Title, &ri.Category, &ri.Status, &ri.Address, &ri.CreatedAt); err != nil {
-			log.Printf("scan recent: %v", err)
-			writeError(w, http.StatusInternalServerError, "could not load dashboard")
-			return
-		}
-		resp.RecentIssues = append(resp.RecentIssues, ri)
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("dashboard recent rows: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
+		return ri, row.Scan(&ri.ID, &ri.Title, &ri.Category, &ri.Status, &ri.Address, &ri.CreatedAt)
+	}); err != nil {
+		return nil, err
 	}
 
-	if err := h.loadTrend(r, &resp); err != nil {
-		log.Printf("dashboard trend: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
-	}
-	if err := h.loadTopAreas(r, &resp); err != nil {
-		log.Printf("dashboard areas: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
-	}
-	if err := h.loadActivity(r, &resp); err != nil {
-		log.Printf("dashboard activity: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load dashboard")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// loadTrend counts issues reported and resolved on each of the last 14 days.
-func (h *Handler) loadTrend(r *http.Request, resp *DashboardResponse) error {
-	rows, err := h.DB.Query(r.Context(), `
+	// Issues reported and resolved on each of the last 14 days.
+	if resp.Trend, err = collect(ctx, h, with+`
 		SELECT to_char(g.d, 'YYYY-MM-DD'),
-			(SELECT COUNT(*) FROM issues WHERE created_at::date = g.d::date),
-			(SELECT COUNT(*) FROM issues WHERE resolved_at::date = g.d::date)
+			(SELECT COUNT(*) FROM f WHERE f.created_at::date = g.d::date),
+			(SELECT COUNT(*) FROM f WHERE f.resolved_at::date = g.d::date)
 		FROM generate_series(current_date - 13, current_date, interval '1 day') AS g(d)
-		ORDER BY g.d`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
+		ORDER BY g.d`, args, func(row pgx.CollectableRow) (TrendPoint, error) {
 		var p TrendPoint
-		if err := rows.Scan(&p.Date, &p.Reported, &p.Resolved); err != nil {
-			return err
-		}
-		resp.Trend = append(resp.Trend, p)
+		return p, row.Scan(&p.Date, &p.Reported, &p.Resolved)
+	}); err != nil {
+		return nil, err
 	}
-	return rows.Err()
-}
 
-// loadTopAreas returns the 5 areas with the most reports (recurring hotspots).
-func (h *Handler) loadTopAreas(r *http.Request, resp *DashboardResponse) error {
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT address, COUNT(*)
-		FROM issues
-		WHERE address <> ''
-		GROUP BY address
-		ORDER BY COUNT(*) DESC, address
-		LIMIT 5`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
+	// The 5 localities with the most reports (recurring hotspots).
+	if resp.TopAreas, err = collect(ctx, h, with+`
+		SELECT COALESCE(NULLIF(area, ''), address) AS place, COUNT(*)
+		FROM f WHERE COALESCE(NULLIF(area, ''), address) <> ''
+		GROUP BY place ORDER BY COUNT(*) DESC, place LIMIT 5`, args, func(row pgx.CollectableRow) (AreaCount, error) {
 		var a AreaCount
-		if err := rows.Scan(&a.Area, &a.Count); err != nil {
-			return err
-		}
-		resp.TopAreas = append(resp.TopAreas, a)
+		return a, row.Scan(&a.Area, &a.Count)
+	}); err != nil {
+		return nil, err
 	}
-	return rows.Err()
+
+	// Latest "reported" and "resolved" events.
+	if resp.Activity, err = collect(ctx, h, with+`
+		SELECT id, title, COALESCE(NULLIF(area, ''), address), 'reported', created_at FROM f
+		UNION ALL
+		SELECT id, title, COALESCE(NULLIF(area, ''), address), 'resolved', resolved_at FROM f WHERE resolved_at IS NOT NULL
+		ORDER BY 5 DESC LIMIT 6`, args, func(row pgx.CollectableRow) (ActivityItem, error) {
+		var a ActivityItem
+		return a, row.Scan(&a.IssueID, &a.Title, &a.Address, &a.Type, &a.At)
+	}); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
-// loadActivity returns the latest "reported" and "resolved" events.
-func (h *Handler) loadActivity(r *http.Request, resp *DashboardResponse) error {
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, title, address, 'reported', created_at FROM issues
-		UNION ALL
-		SELECT id, title, address, 'resolved', resolved_at FROM issues WHERE resolved_at IS NOT NULL
-		ORDER BY 5 DESC
-		LIMIT 6`)
+// collect runs a query and scans every row, returning an empty (not nil) slice.
+func collect[T any](ctx context.Context, h *Handler, sql string, args []any, scan pgx.RowToFunc[T]) ([]T, error) {
+	rows, err := h.DB.Query(ctx, sql, args...)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var a ActivityItem
-		if err := rows.Scan(&a.IssueID, &a.Title, &a.Address, &a.Type, &a.At); err != nil {
-			return err
-		}
-		resp.Activity = append(resp.Activity, a)
+	items, err := pgx.CollectRows(rows, scan)
+	if items == nil {
+		items = []T{}
 	}
-	return rows.Err()
+	return items, err
 }
